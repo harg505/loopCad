@@ -1,0 +1,351 @@
+<html>
+<head>
+<link rel="stylesheet" type="text/css" href="main.css">
+</head>
+<body>
+<div id="demo">
+<svg viewbox="0 0 600 400" id="SS"></svg>
+</body>
+</svg>
+</div>
+
+<div id=radContext class=context>
+		<div id="contextTitle"></div>
+		<span>(R)</span><input type="number" id="contextR" step="0.05" name="(R)adius" min="0">
+		<span>(X)</span><input type="number" id="contextX" step="0.05" name="(X)">
+		<span>(Y)</span><input type="number" id="contextY" step="0.05" name="(Y)">
+		<button type="button" id="contextFlip">(F)lip</button>
+		<button type="button" id="contextinsert">(Insert)</button>
+		<button type="button" id="contextinsert">(Delete)</button>
+		</div>
+<div id="debug"></div>
+
+<script type="module">
+
+document.documentElement.style.overflow = 'hidden';
+var undoStack = [];
+var circleFill = "none";
+var x2,y2,dx,dy;
+var distance = 100;
+var SSsvg = document.getElementById("SS");
+var pt = SSsvg.createSVGPoint();  // Created once for document
+var selectedElement = false;
+//var previousMarks = null;
+
+import {circle, line, dot, vectorEnd, vline, pt2d, mark, joinMarks, drawAllMarks} from './modules/drawing.js';
+import {highLight, unHighLight, viewBox, refitWindow} from './modules/view.js';
+import {createMarks, toType} from './modules/misc.js';
+//create initial marks
+
+var marks = createMarks(10,100);
+
+function printLinkedList(){for (var i in marks) {if (marks.hasOwnProperty(i)) {console.log(`mark=${i} up=${marks[i].up} down=${marks[i].down}`);}}}
+printLinkedList();
+
+function AlignMarksFree(id1,id2,target){
+	var a = marks[id1]; var b = marks[id2];
+	if((a.group != b.group) | (a.group == null) )
+	{
+		const [origin,T,A] = joinMarks(a,b,SSsvg);
+		var 	cx = (a.x+b.x)/2,	cy = (a.y+b.y)/2, 	dx = b.x-a.x, 		dy = b.y-a.y;
+		var current = Math.atan2(dy,dx);
+		if(current < 0){current += 2*Math.PI;}
+		if(target < 0){target += 2*Math.PI;}
+		var mag = Math.pow(dx*dx+dy*dy,0.5) /2;  			//magnitude fo the vectore between center of circle and midway point between (c)
+		
+		var newAngle = current + target-T;
+		var c1 = new pt2d(cx + mag*Math.cos(newAngle),  cy + mag*Math.sin(newAngle));
+		var c2 = new pt2d(cx + mag*Math.cos(newAngle+Math.PI), cy + mag*Math.sin(newAngle+Math.PI));
+		
+		var d1 = Math.pow(a.x-c1.x,2) + Math.pow(a.y-c1.y,2)  
+		var d2 = Math.pow(a.x-c2.x,2) + Math.pow(a.y-c2.y,2)
+		if(d1 < d2) {
+			moveMark(id1,c1.x,c1.y);
+			moveMark(id2,c2.x,c2.y);
+			a.x = c1.x; a.y = c1.y; 
+			b.x = c2.x; b.y = c2.y;
+		}
+		else{
+			moveMark(id1,c2.x,c2.y);
+			moveMark(id2,c1.x,c1.y);
+			a.x = c2.x; a.y = c2.y; 
+			b.x = c1.x; b.y = c1.y;
+		}
+		drawAllMarks(SSsvg,marks);
+		joinAllMarks();
+	}
+}
+
+function joinMark(i){
+	joinMarks(marks[i],marks[marks[i].up],SSsvg);
+	joinMarks(marks[marks[i].down],marks[i],SSsvg);
+}
+
+
+function joinAllMarks()
+{
+	Object.keys(marks).forEach(function(i)
+		{
+			joinMark(i);
+		});
+}
+
+drawAllMarks(SSsvg,marks);
+refitWindow(marks,SSsvg);
+
+function showRadContext(e,focus){
+	contextTitle.innerHTML = e.target.id;
+	var contextCircle = e.target;
+	radContextDiv.style.position = "absolute";
+  	radContextDiv.style.left = e.clientX;
+  	radContextDiv.style.top = e.clientY;
+	radContextDiv.style.display = "block";
+	contextX.value = e.target.getAttribute("cx");
+	contextY.value = e.target.getAttribute("cy");
+	contextR.value = e.target.getAttribute("r");
+	if(focus != null){ focus.focus(); focus.select(); }	
+
+	radContextDiv.addEventListener('input', (e) => {
+		switch(e.target){
+			case contextX:
+				contextCircle.setAttribute("cx",contextX.value); 
+				marks[contextCircle.id].x = parseFloat(contextX.value);					
+				savePrevState();		contextCircle.setAttribute("r",contextR.value);
+				marks[contextCircle.id].dia = contextR.value*2;		
+			break;
+			default:
+				alert("unimplement")
+			break;			
+		}
+		joinMark(contextCircle.id);
+	});	
+}
+
+joinAllMarks();
+//var markContext = document.getElementById("markContext")
+var viewCentre = null;
+var circleOrigin = null;
+var initalClick = null;
+var selectedCircle = null;
+var mouseOver = null;
+var mouseOverLine = null;
+var pan = false;
+
+var vb = new viewBox(SSsvg);
+
+SSsvg.addEventListener('mouseup', (e) => {
+	if(e.button=="0"){joinAllMarks(); selectedCircle = null;}
+	else if (e.button=="1"){pan=false;}
+})
+
+SSsvg.addEventListener('mouseover', (e) => {
+	if(toType(e.target) =="svgcircleelement"){
+		mouseOver = e.target.id;
+		e.target.addEventListener('mouseleave', (e) => { 
+			if(toType(e.target) =="svgcircleelement"){
+				mouseOver = null;
+			}	
+		});
+	}
+	else if(toType(e.target) =="svglineelement"){
+		mouseOverLine = e.target.id;
+		e.target.addEventListener('mouseleave', (e) => { 
+			if(toType(e.target) =="svglineelement"){
+				mouseOverLine = null;
+			}	
+		});
+	}
+});
+
+function savePrevState(){
+	var previousMarks = {};
+	Object.keys(marks).forEach(function(index){previousMarks[index] = marks[index].deepCopy();});
+	undoStack.push(previousMarks)
+	console.log(`undoStack = ${undoStack.length}`)
+}
+
+function moveMark(id,x,y){
+	moveMarkDelta(id ,x - marks[id].x, y - marks[id].y);
+}
+
+function moveMarkDelta(id,dx,dy){
+	var previousMarks = undoStack[undoStack.length - 1];
+	var marksToJoin = [];
+	Object.keys(marks).forEach(function(i){
+		//console.log(i);
+		var m = marks[i];
+		if( ((m.group == marks[id].group) & marks[id].group != null) | (id == i)){ 			
+			m.x = previousMarks[i].x + dx;
+			m.y = previousMarks[i].y + dy;
+			var c = SSsvg.getElementById(i);
+			c.setAttribute("cx", m.x);
+			c.setAttribute("cy",m.y);
+			marksToJoin.push(i); 
+		}	
+	});
+	marksToJoin.forEach(function(index,element){joinMark(index)});
+}
+
+SSsvg.addEventListener('mousemove', (e) => {
+var cursor = svgPointFromEvent(e);
+if(selectedCircle != null){
+	var id = selectedCircle.getAttribute("id");
+	var dx = cursor.x-initalClick.x;
+	var dy = cursor.y-initalClick.y;
+	//console.log(`length: ${marks.length}`)
+	moveMarkDelta(id,dx,dy);
+}
+
+if(pan)
+{
+vb.move(cursor.x-initalClick.x,cursor.y-initalClick.y);
+SSsvg.setAttribute("viewBox",vb);
+initalClick = cursor;
+}
+});
+
+SSsvg.addEventListener("wheel", (e) => {
+	e.preventDefault();
+	var pt = svgPointFromEvent(e);
+	console.log(e);
+	if(e.deltaY>0) {vb.scale(1.1);}
+	else if(e.deltaY<0) {vb.scale(1/1.1);}
+	SSsvg.setAttribute("viewBox",vb);
+});
+
+var radContextDiv = document.getElementById("radContext");
+var contextX = document.getElementById("contextX"), contextY = document.getElementById("contextY"), contextR = document.getElementById("contextR");
+var selectedLine = null;
+SSsvg.addEventListener('mousedown', (e) => {
+  initalClick = svgPointFromEvent(e);  
+  console.log(e.button);
+  if(toType(e.target) =="svgcircleelement" & e.button==0) 
+    {
+		savePrevState();
+		var i;
+		selectedCircle = document.getElementById(e.target.id);
+		circleOrigin = SSsvg.createSVGPoint();
+		circleOrigin.x = selectedCircle.getAttribute("cx");
+		circleOrigin.y = selectedCircle.getAttribute("cy");
+	}
+    else if(e.button==1){pan=true;  radContextDiv.style.display = "none";}
+	else if(e.button==2){  
+		if(toType(e.target) =="svgcircleelement")
+		{		
+			showRadContext(e);
+		}
+		else{radContextDiv.style.display = "none";}	
+	}
+	else if(toType(e.target) == "svglineelement" & e.button==0)
+	{
+	}
+	else{radContextDiv.style.display = "none";}
+});
+
+//svg isn't an input-type events.
+window.addEventListener("keydown", function (event) {
+	console.log(event.key);
+	if((event.key == "z") & (undoStack.length > 0)){
+				console.log(`${event.key} ${undoStack.length}`);
+				marks = undoStack.pop();
+				drawAllMarks(SSsvg,marks);
+				joinAllMarks();	
+			}
+			else{
+				console.log("undoStack Empty");
+			}
+
+	if(mouseOverLine != null){
+		console.log(mouseOverLine);
+		var [a,b] = mouseOverLine.slice(4).split("-")
+		switch (event.key) {
+			case "v": 
+				savePrevState();
+				AlignMarksFree(a,b,Math.PI/2);
+			break;
+			case "h":	
+				savePrevState();
+				AlignMarksFree(a,b,0);
+			break;
+		}
+	}
+	if(mouseOver != null){
+		var m = marks[mouseOver];	  
+		if("0123456789".includes(event.key))
+		{	
+			m.group=event.key;
+			drawAllMarks(SSsvg,marks);
+			joinAllMarks();
+		}
+		
+		switch (event.key) {
+			case "+":
+				m.dia +=1;
+				drawAllMarks(SSsvg,marks);
+				joinAllMarks();
+				break;
+			case "-":
+				m.dia -=1;
+				drawAllMarks(SSsvg,marks);
+				joinAllMarks();
+				break;		
+			case "`":
+				m.group=null;
+				drawAllMarks(SSsvg,marks);
+				joinAllMarks();;
+			break;
+			case "ArrowRight":
+			  // code for "right arrow" key press.
+			  break;
+			break;
+			case "f":
+					m.direction = !m.direction;
+					joinMark(mouseOver); 
+			break;
+			case "Delete":
+					savePrevState();
+					marks[m.up].down = m.down;
+					marks[m.down].up = m.up;
+					delete marks[mouseOver];
+					SSsvg.innerHTML = "";					
+					drawAllMarks(SSsvg,marks);
+					joinAllMarks();
+			  break;
+			case "r":
+				showRadContext(e,focus);	
+			break;
+
+			case "Insert":
+				savePrevState();
+				var i = 0; while(marks.hasOwnProperty(i)){i++;}
+				var next = m.up;					
+				marks[i] = new mark(i,20,0,0,true);
+				console.log(`mouseOver=${mouseOver} i=${i} next=marks[i]${next}`);
+
+				marks[mouseOver].up = i;
+				marks[i].down = mouseOver;
+				marks[i].up = next;
+				marks[next].down = i;					
+				//printLinkedList();
+				SSsvg.innerHTML = "";					
+				drawAllMarks(SSsvg,marks);
+				joinAllMarks();
+			  break;
+
+			default:
+			  return; 
+		}// Quit when this doesn't handle the key event.
+  }
+});
+
+function svgPointFromEvent(e){
+pt.x = e.clientX;	pt.y = e.clientY;
+return pt.matrixTransform(SSsvg.getScreenCTM().inverse()); 
+}
+
+addEventListener( "contextmenu", function(e) {e.preventDefault();});
+
+//var a = setInterval(rot, 50);
+</script>
+</div>
+</html>
